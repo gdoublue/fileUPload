@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>文件上传by-vue+elementUI</title>
+    <!-- 引入样式 -->
+    <link rel="stylesheet" href="https://unpkg.com/element-ui/lib/theme-chalk/index.css">
+    <!-- 引入组件库 -->
+    <script src="https://cdn.bootcdn.net/ajax/libs/vue/2.6.6/vue.js"></script>
+    <script src="https://unpkg.com/element-ui/lib/index.js"></script>
+</head>
+<body>
+    <div id="app" style="margin: 10px auto">
+        <div>
+            <input type="file" @change="handleFileChange">
+        </div>
+        <el-button @click="handleUpload">UpLoad</el-button>
+        <div v-if="status !== 'wait'" >
+            正在计算文件
+            <el-progress :text-inside="true" :stroke-width="24" :percentage="hashPercentage" status="success"></el-progress>
+        </div>
+
+    </div>
+    <script>
+        const Status = { // enum  有利于代码的可读性
+            wait: "wait",
+            pause: "pause",
+            uploading: "uploading"
+        }
+        const SIZE = 512*1024
+        var vm = new Vue(
+            {
+                el:'#app',
+                data:function() {
+                    return {
+                        container:{ //将我们的任务放到一起
+                            file: null,
+                            hash: "", // 哈希
+                        },
+                        status:Status.wait,
+                        hashPercentage:0
+                    }
+                },
+                methods:{
+                    handleFileChange(e) {
+
+                        const [ file ] = e.target.files; // 拿到第一个文件
+                        this.container.file = file
+                    },
+                    async handleUpload (e){      /*点击上传按钮执行*/
+                        if(!this.container.file) return ;
+                        this.status = Status.uploading
+                        const fileChunkList = this.createFileChunk(this.container.file)  //先切片去
+                        // console.log(fileChunkList)  /*// 切成 :0: {file: Blob}1: {file: Blob}2: {file: Blob}3: {file: Blob}*/
+                        this.container.hash = await this.calcHash(fileChunkList)
+                        const {shouldUpload,uploadedList } = await this.verifyUpload(this.container.file.name,this.container.hash)
+
+                    },
+                  async  verifyUpload(filename,fileHash){
+                        const { data } = await this.request({
+                            url: 'http://localhost:3000/verify',
+                            headers: {
+                                "content-type": "application/json"
+                            },
+                            data: JSON.stringify({ // 字符串化
+                                filename,
+                                fileHash
+                            })
+                        })
+                        return JSON.parse(data)
+                    },
+                    createFileChunk(file, size = SIZE){  //切片
+                        const fileChunkList =[]
+                        let cur = 0 ;
+                        while(cur < file.size){
+                            fileChunkList.push({
+                                file:file.slice(cur,cur + size)
+                            })
+                            cur += size
+                        }
+                        return fileChunkList
+                    },
+                    /*计算hash*/
+                    async calcHash(fileChunkList){
+                        return new Promise(resolve => {
+                            // web Worker  单独开一个线程,独立于worker
+                            this.container.worker = new Worker("./hash.js")
+                            this.container.worker.postMessage({fileChunkList})
+                            this.container.worker.onmessage = e =>{
+                                const { percentage , hash} = e.data
+                                this.hashPercentage = percentage
+                                if(hash){
+                                    resolve(hash)
+                                }
+                            }
+
+                        })
+                    },
+                    request({
+                                url,
+                                method = 'POST',
+                                data,
+                                onProgress = e => e,
+                                headers = {},
+                                requestList //   上传的文件列表
+                            }) {
+                        return new Promise(resolve => {
+                            const xhr = new XMLHttpRequest(); // js ajax 对象
+                            xhr.open(method, url); // 请求
+                            xhr.upload.onprogress = onProgress;
+                            Object.keys(headers).forEach(key =>
+                                xhr.setRequestHeader(key, headers[key]) // 请求加头
+                            );
+                            xhr.send(data);
+                            xhr.onload = e => {
+                                // console.log(e.target.response, '+++++++++++');
+                                if (requestList) {
+                                    // xhr 使命完成了
+                                    const xhrIndex = requestList.findIndex(item => item === xhr);
+                                    requestList.splice(xhrIndex, 1);
+                                }
+                                resolve({
+                                    data: e.target.response
+                                });
+                            }
+                            if (requestList) {
+                                requestList.push(xhr);  // 每个请求
+                                console.log(requestList);
+                            }
+                        });
+                    },
+                }
+
+            }
+        )
+    </script>
+</body>
+</html>
