@@ -15,6 +15,9 @@ server.on("request", async (req, res)=>{
         // res.end('verify');
         await controller.handleVerifyUpload(req, res)
     }
+    if(req.url == '/upload'){
+        await  controller.handleFormData(req,res) /*处理上传来的片段*/
+    }
 })
 
 server.listen(PORT, () => {

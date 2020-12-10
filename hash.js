@@ -18,7 +18,7 @@ self.onmessage = e=>{
                 })
                 self.close()
             }else{
-                percentage = (count/fileChunkList.length) * 100
+                percentage = (count/fileChunkList.length).toFixed(2) * 100
                 self.postMessage({
                     percentage
                 })

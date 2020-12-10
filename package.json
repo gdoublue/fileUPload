@@ -17,6 +17,7 @@
   },
   "homepage": "https://github.com/gdoublue/fileUPload#readme",
   "dependencies": {
-    "fs-extra": "^9.0.1"
+    "fs-extra": "^9.0.1",
+    "multiparty": "^4.2.2"
   }
 }
