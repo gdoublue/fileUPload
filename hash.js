@@ -1,4 +1,4 @@
-self.importScripts('https://cdn.bootcdn.net/ajax/libs/spark-md5/3.0.0/spark-md5.min.js')
+self.importScripts('./spark-md5.min.js')
 self.onmessage = e=>{
     const { fileChunkList} = e.data
     const spark = new self.SparkMD5.ArrayBuffer()

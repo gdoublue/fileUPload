@@ -3,22 +3,23 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>文件上传by-vue+elementUI</title>
+    <title>文件上传-vue+elementUI</title>
     <!-- 引入样式 -->
-    <link
-      rel="stylesheet"
-      href="https://unpkg.com/element-ui/lib/theme-chalk/index.css"
-    />
+    <link rel="stylesheet" href="https://unpkg.com/element-ui/lib/theme-chalk/index.css">
     <!-- 引入组件库 -->
-    <script src="https://cdn.bootcdn.net/ajax/libs/vue/2.6.6/vue.js"></script>
+    <script src="./vue.js"></script>
+<!--    <script src="https://cdn.bootcdn.net/ajax/libs/vue/2.6.5/vue.min.js"></script>-->
     <script src="https://unpkg.com/element-ui/lib/index.js"></script>
   </head>
   <body>
     <div id="app" style="margin: 10px auto">
-      <div>
+      <div class="input">
+
         <input type="file" @change="handleFileChange" />
       </div>
-      <el-button @click="handleUpload">UpLoad</el-button>
+      <el-button @click="handleUpload" :loading="status==='uploading'?true:false">UpLoad</el-button>
+      <el-button @click="handlePause" type="danger">暂停</el-button>
+      <el-button @click="handleResume" type="success">恢复</el-button>
       <div v-if="status !== 'wait'">
         正在计算文件
         <el-progress
@@ -55,6 +56,7 @@
 
     </div>
     <script>
+        const URL = 'http://192.168.31.224:8008'
       const Status = {
         // enum  有利于代码的可读性
         wait: "wait",
@@ -92,9 +94,26 @@
           }
         },
         methods: {
+
           handleFileChange(e) {
             const [file] = e.target.files; // 拿到第一个文件
             this.container.file = file;
+            console.log('fileChange')
+          },
+          handlePause(){     //暂停上传
+              this.status = Status.pause
+            this.requestList.forEach(xhr => xhr?.abort());
+            this.requestList = [];
+          },
+        async  handleResume(){
+              this.status = Status.uploading
+          if(!this.container.hash) return ;
+            const { uploadedList } = await this.verifyUpload(
+                            this.container.file.name,
+                           this.container.hash
+                        );
+                 await this.uploadChunks(uploadedList);
+
           },
           async handleUpload(e) {
             /*点击上传按钮执行*/
@@ -103,7 +122,7 @@
             const fileChunkList = this.createFileChunk(this.container.file); //先切片去
             // console.log(fileChunkList)  /*// 切成 :0: {file: Blob}1: {file: Blob}2: {file: Blob}3: {file: Blob}*/
             this.container.hash = await this.calcHash(fileChunkList);
-            const { shouldUpload, uploadedList } = await this.verifyUpload(
+            const { shouldUpload, uploadedList=[] } = await this.verifyUpload(
               this.container.file.name,
               this.container.hash
             );
@@ -120,14 +139,35 @@
                 hash: this.container.hash + "-" + index /*当前切片的hash*/,
                 chunk: file /*切好的blob片段*/,
                 size: file.size,
-                percentage: uploadedList.includes(index) ? 100 : 0,
+                percentage: uploadedList.includes(this.container.hash + "-" + index) ? 100 : 0,
               }));
               await this.uploadChunks(uploadedList);
-              this.$message.success("上传success");
+
             }
           },
+          async mergeRequest() {
+           const { data}=  await this.request({
+              url: `${URL}/merge`,
+              headers: {
+                "content-type": "application/json"
+              },
+              data: JSON.stringify({
+                size: SIZE,
+                fileHash: this.container.hash,
+                filename: this.container.file.name
+              })
+            })
+            const {message , code} = JSON.parse(data)
+            if (code === 0 ){
+              this.$message.success('服务器接收成功/');
+              console.log(message)
+              Object.assign(this.$data, this.$options.data());
+            }
+            this.status = Status.wait;
+          },
           async uploadChunks(uploadedList = []) {
-            const requestList = this.data.map(
+            const requestList = this.data.filter(({ hash }) => !uploadedList.includes(hash))
+                    .map(
               ({ chunk, hash, index, fileHash }) => {
                 const formData = new FormData();
                 formData.append("chunk", chunk);
@@ -138,16 +178,28 @@
               }
             )
                 .map(async ({formData,index})=>{
-                    this.request(
+                   return  this.request(
                         {
-                            url:'http://localhost:3000/upload',
+                            url:`${URL}/upload`,
                             data:formData,
                             onProgress: this.createProgressHandler(this.data[index]),    //????
                             requestList:this.requestList
                         }
                     )
                 })
-              await Promise.all(requestList);
+         await Promise.all(requestList).then(async (res)=>{
+           const { uploadedList=[] } = await this.verifyUpload(
+                   this.container.file.name,
+                   this.container.hash
+           )
+           if (uploadedList.length ===this.data.length){
+             this.$message.success("文件上传完毕!")
+            this.mergeRequest()  //发送合并请求
+           }
+            }).catch((res)=>{
+           console.log('error183',res)
+         })
+
           },
             createProgressHandler (item) {
                 return e => {
@@ -157,7 +209,7 @@
             },
           async verifyUpload(filename, fileHash) {
             const { data } = await this.request({
-              url: "http://localhost:3000/verify",
+              url: `${URL}/verify`,
               headers: {
                 "content-type": "application/json",
               },
@@ -216,19 +268,21 @@
 
               xhr.onreadystatechange = function () {
                 if (xhr.readyState == 4 && xhr.status == 0) {
-                  vm.$message.error("网络错误");
+                  // vm.$message.error("网络错误");
                 }
               };
               xhr.send(data);
+              xhr.onerror=(e) =>{
+                reject(e)
+              }
               xhr.onload = (e) => {
-                console.log(e.target.response, '+++++++++++');
+                // console.log(e.target.response, '+++++++++++');
                 if (requestList) {
                   // xhr 使命完成了
                   const xhrIndex = requestList.findIndex(
                     (item) => item === xhr
                   );
                   requestList.splice(xhrIndex, 1);
-                  // console.log('列表移除完成',xhrIndex)  找不到
                 }
                 resolve({
                   data: e.target.response,

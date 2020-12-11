@@ -1,6 +1,6 @@
 const http = require("http");
 const server = http.createServer();
-const PORT = 3000;
+const PORT = 8008;
 const Controller =require('./controller')
 const controller = new Controller()
 server.on("request", async (req, res)=>{
@@ -17,6 +17,9 @@ server.on("request", async (req, res)=>{
     }
     if(req.url == '/upload'){
         await  controller.handleFormData(req,res) /*处理上传来的片段*/
+    }
+    if(req.url == '/merge'){
+        await  controller.handleMerge(req,res) /*处理上传来的片段*/
     }
 })
 
