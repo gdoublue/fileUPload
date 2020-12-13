@@ -1,28 +1,333 @@
 <template>
   <div id="app">
-    <img alt="Vue logo" src="./assets/logo.png">
-    <HelloWorld msg="Welcome to Your Vue.js App"/>
+     <div class="input">
+
+        <input type="file" @change="handleFileChange" />
+      </div>
+      <el-button @click="handleUpload" :loading="status==='uploading'?true:false">UpLoad</el-button>
+      <el-button @click="handlePause" type="danger">暂停</el-button>
+      <el-button @click="handleResume" type="success">恢复</el-button>
+      <div>
+        正在计算文件
+        <el-progress
+          :text-inside="true"
+          :stroke-width="15"
+          :percentage="hashPercentage"
+        ></el-progress>
+        总进度
+        <el-progress :text-inside="true" :stroke-width="24" :percentage="uploadPercentage" status="success"></el-progress>
+<!--        <el-table-->
+<!--                :data="data"-->
+<!--                border-->
+<!--                style="width: 100%">-->
+<!--          <el-table-column-->
+<!--                  prop="hash"-->
+<!--                  label="切片"-->
+<!--                  width="420">-->
+<!--          </el-table-column>-->
+<!--          <el-table-column-->
+<!--                  label="大小(KB)"-->
+<!--                  width="180">-->
+<!--            <template v-slot="{row}">-->
+<!--              <span style="margin-left: 10px">{{ row.size | transformByte }}</span>-->
+<!--            </template>-->
+<!--          </el-table-column>-->
+<!--          <el-table-column-->
+<!--                  label="进度">-->
+<!--            <template v-slot="{row}">-->
+<!--              <el-progress   :percentage="row.percentage"  :stroke-width="10" ></el-progress>-->
+<!--            </template>-->
+<!--          </el-table-column>-->
+<!--        </el-table>-->
+      </div>
+
   </div>
 </template>
 
 <script>
-import HelloWorld from './components/HelloWorld.vue'
-
+import {Status,SIZE,URL} from './assets/global'
 export default {
+
   name: 'App',
-  components: {
-    HelloWorld
-  }
+  data:function () {
+          return {
+            container: {
+              //将我们的任务放到一起
+              file: null,
+              hash: "", // 哈希
+            },
+            status: Status.wait,
+            hashPercentage: 0,
+            data: [],
+              requestList: []  /*存放xhr*/
+          };
+        },
+         filters: {
+          transformByte(val) {
+            return Number((val/1024).toFixed(0))
+          }
+        },
+        computed:{
+          uploadPercentage(){
+            if (!this.container.file || !this.data.length) return 0;
+            const loaded = this.data
+                    .map(item => item.size * item.percentage) //每个blob的已上传大下
+                    .reduce((acc, cur) => acc + cur)   //已上传的总文件大小
+            return parseInt((loaded / this.container.file.size).toFixed(2));
+          }
+        },
+        methods: {
+
+          handleFileChange(e) {
+            const [file] = e.target.files; // 拿到第一个文件
+            this.container.file = file;
+            console.log('fileChange')
+            this.$message.success('拿到一个文件')
+          },
+          handlePause(){     //暂停上传
+              this.status = Status.pause
+            this.requestList.forEach(xhr => xhr?.abort());
+            this.requestList = [];
+          },
+        async  handleResume(){
+              this.status = Status.uploading
+          if(!this.container.hash) return ;
+            const { uploadedList } = await this.verifyUpload(
+                            this.container.file.name,
+                           this.container.hash
+                        );
+                 await this.uploadChunks(uploadedList);
+
+          },
+          async handleUpload(e) {
+            /*点击上传按钮执行*/
+            if (!this.container.file) return;
+            this.status = Status.uploading;
+            const fileChunkList = this.createFileChunk(this.container.file); //先切片去
+            // console.log(fileChunkList)  /*// 切成 :0: {file: Blob}1: {file: Blob}2: {file: Blob}3: {file: Blob}*/
+            this.container.hash = await this.calcHash(fileChunkList);
+            const { shouldUpload, uploadedList=[] } = await this.verifyUpload(
+              this.container.file.name,
+              this.container.hash
+            );
+            // console.log(shouldUpload);
+            if (!shouldUpload) {
+              this.$message("秒传:上传完毕");
+              this.status = Status.wait;
+              return;
+            } else {
+              this.$message("开始上传");
+              this.data = fileChunkList.map(({ file }, index) => ({
+                fileHash: this.container.hash /*整个文件hash*/,
+                index,
+                hash: this.container.hash + "-" + index /*当前切片的hash*/,
+                chunk: file /*切好的blob片段*/,
+                size: file.size,
+                percentage: uploadedList.includes(this.container.hash + "-" + index) ? 100 : 0,
+              }));
+              await this.uploadChunks(uploadedList);
+
+            }
+          },
+          async mergeRequest() {
+           const { data}=  await this.request({
+              url: `${URL}/merge`,
+              headers: {
+                "content-type": "application/json"
+              },
+              data: JSON.stringify({
+                size: SIZE,
+                fileHash: this.container.hash,
+                filename: this.container.file.name
+              })
+            })
+            const {message , code} = JSON.parse(data)
+            if (code === 0 ){
+              this.$message('服务器接收成功/');
+              console.log(message)
+              Object.assign(this.$data, this.$options.data());
+            }
+            this.status = Status.wait;
+          },
+          async uploadChunks(uploadedList = []) {
+            const forms = this.data.filter(({ hash }) => !uploadedList.includes(hash))
+                    .map(
+              ({ chunk, hash, index, fileHash }) => {
+                const formData = new FormData();
+                formData.append("chunk", chunk);
+                formData.append("hash", hash);
+                formData.append("filename", this.container.file.name);
+                formData.append("fileHash", fileHash);
+                return {formData,index}
+              }
+            )
+
+                // .map(async ({formData,index})=>{
+                //    return  this.request(
+                //         {
+                //             url:`${URL}/upload`,
+                //             data:formData,
+                //             onProgress: this.createProgressHandler(this.data[index]),    //????
+                //             requestList:this.requestList
+                //         }
+                //     )
+                // })
+         // await Promise.all(this.sendRequest(forms)).then(async (res)=>{
+         //   const { uploadedList=[] } = await this.verifyUpload(
+         //           this.container.file.name,
+         //           this.container.hash
+         //   )
+         //   if (uploadedList.length ===this.data.length){
+         //     this.$message("文件上传完毕!")
+         //    this.mergeRequest()  //发送合并请求
+         //   }
+         //    }).catch((res)=>{
+         //   console.log('error183',res)
+         // })
+            await this.sendRequest(forms)
+              console.log('188')
+              const { uploadedList:loadedList } = await this.verifyUpload(
+                        this.container.file.name,
+                        this.container.hash
+                )
+              if (loadedList.length ===this.data.length){
+                      this.$message("文件上传完毕!")
+                     this.mergeRequest()  //发送合并请求
+                    }
+          },
+            async sendRequest(forms,max = 3){
+              return new Promise(resolve => {
+                  const len = forms.length;
+                  let idx = 0 ;
+                  let counter = 0;
+                  const start = async()=>{
+                      while(idx < len && max > 0){
+                          max--;
+                          const form = forms[idx].formData;
+                          const index = forms[idx].index;
+                          idx++;
+                      this.request({
+                          url:`${URL}/upload`,
+                          data:form,
+                          onProgress: this.createProgressHandler(this.data[index]),    //????
+                          requestList:this.requestList
+                      }).then(()=>{
+                          max++;
+                          counter++;
+                          if(counter ===len){
+                              resolve()
+                          }else(
+                              start()
+                          )
+                      })
+                    }
+                  }
+                  start()
+              })
+            },
+            createProgressHandler (item) {
+                return e => {
+                    item.percentage = parseInt(String((e.loaded/e.total) * 100));
+                    // console.log(e.loaded, e.total, '----------');
+                }
+            },
+          async verifyUpload(filename, fileHash) {
+            const { data } = await this.request({
+              url: `${URL}/verify`,
+              headers: {
+                "content-type": "application/json",
+              },
+              data: JSON.stringify({
+                // 字符串化
+                filename,
+                fileHash,
+              }),
+            });
+            return JSON.parse(data);
+          },
+          createFileChunk(file, size = SIZE) {
+            //切片
+            const fileChunkList = [];
+            let cur = 0;
+            while (cur < file.size) {
+              fileChunkList.push({
+                file: file.slice(cur, cur + size),
+              });
+              cur += size;
+            }
+            return fileChunkList;
+          },
+          /*计算hash*/
+          async calcHash(fileChunkList) {
+            return new Promise((resolve) => {
+              // web Worker  单独开一个线程,独立于worker
+              this.container.worker = new Worker("./hash.js");
+              this.container.worker.postMessage({ fileChunkList });
+              this.container.worker.onmessage = (e) => {
+                const { percentage, hash } = e.data;
+                this.hashPercentage = percentage;
+                if (hash) {
+                  resolve(hash);
+                }
+              };
+            });
+          },
+
+          request({
+            url,
+            method = "POST",
+            data,
+            onProgress = (e) => e,
+            headers = {},
+            requestList, //   上传的文件列表
+          })
+          {
+            return new Promise((resolve, reject) => {
+              const xhr = new XMLHttpRequest(); // js ajax 对象
+              xhr.open(method, url); // 请求
+              xhr.upload.onprogress = onProgress
+              Object.keys(headers).forEach(
+                (key) => xhr.setRequestHeader(key, headers[key]) // 请求加头
+              );
+
+              xhr.onreadystatechange = function () {
+                if (xhr.readyState == 4 && xhr.status == 0) {
+                  // vm.$message("网络错误");
+                }
+              };
+              xhr.send(data);
+              xhr.onerror=(e) =>{
+                reject(e)
+              }
+              xhr.onload = (e) => {
+                // console.log(e.target.response, '+++++++++++');
+                if (requestList) {
+                  // xhr 使命完成了
+                  const xhrIndex = requestList.findIndex(
+                    (item) => item === xhr
+                  );
+                  requestList.splice(xhrIndex, 1);
+                }
+                resolve({
+                  data: e.target.response,
+                });
+              };
+              if (requestList) {
+                requestList.push(xhr); // 每个请求
+                // console.log(requestList);
+              }
+            });
+          },
+
+        }
+
+
+
 }
 </script>
 
 <style>
 #app {
-  font-family: Avenir, Helvetica, Arial, sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  text-align: center;
-  color: #2c3e50;
-  margin-top: 60px;
+
 }
 </style>
